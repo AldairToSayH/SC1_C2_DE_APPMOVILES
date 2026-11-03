@@ -1,0 +1,32 @@
+{
+  "rules": {
+    "markers": {
+      ".read": true,
+      ".write": true,
+      "$markerId": {
+        ".validate": "newData.hasChildren(['id', 'title', 'description', 'latitude', 'longitude'])",
+        "id": {
+          ".validate": "newData.isString() && newData.val() === $markerId"
+        },
+        "title": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 100"
+        },
+        "description": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 500"
+        },
+        "latitude": {
+          ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90"
+        },
+        "longitude": {
+          ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180"
+        },
+        "$other": {
+          ".validate": false
+        }
+      }
+    },
+    "$other": {
+      ".validate": false
+    }
+  }
+}
