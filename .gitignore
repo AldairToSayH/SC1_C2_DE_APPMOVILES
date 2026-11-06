@@ -7,9 +7,21 @@
 /.idea/workspace.xml
 /.idea/navEditor.xml
 /.idea/assetWizardSettings.xml
+/.idea/
 .DS_Store
 /build
 /captures
 .externalNativeBuild
 .cxx
 local.properties
+
+# Configuración y credenciales locales
+app/google-services.json
+.env
+.env.*
+!.env.example
+keystore.properties
+*.jks
+*.keystore
+*.pem
+*.key

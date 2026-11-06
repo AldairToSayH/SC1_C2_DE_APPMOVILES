@@ -29,7 +29,10 @@ class MainActivity : ComponentActivity() {
             Examenunidad3Theme(dynamicColor = false) {
                 val factory = remember(repository) { MapViewModel.Factory(repository) }
                 val mapViewModel: MapViewModel = viewModel(factory = factory)
-                MapScreen(viewModel = mapViewModel)
+                MapScreen(
+                    viewModel = mapViewModel,
+                    onCloseApp = ::finishAffinity
+                )
             }
         }
     }

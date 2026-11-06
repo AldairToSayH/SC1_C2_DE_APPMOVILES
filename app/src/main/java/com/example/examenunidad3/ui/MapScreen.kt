@@ -1,5 +1,11 @@
 package com.example.examenunidad3.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Handler
+import android.os.Looper
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,6 +43,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -46,10 +53,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import com.example.examenunidad3.BuildConfig
 import com.example.examenunidad3.data.MapLocation
+import com.example.examenunidad3.voice.AndroidVoiceRecognizer
+import com.example.examenunidad3.voice.AndroidVoiceSpeaker
+import com.example.examenunidad3.voice.QwenVoiceInterpreter
+import com.example.examenunidad3.voice.VoiceAction
+import com.example.examenunidad3.voice.VoiceCommand
+import com.example.examenunidad3.voice.VoiceEngine
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
@@ -58,19 +74,176 @@ import com.google.maps.android.compose.MapUiSettings
 import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.rememberCameraPositionState
 import com.google.maps.android.compose.rememberUpdatedMarkerState
+import java.text.Normalizer
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MapScreen(
     viewModel: MapViewModel,
+    onCloseApp: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val state = viewModel.uiState
     val snackbarHostState = remember { SnackbarHostState() }
     var showForm by remember { mutableStateOf(false) }
     var showMarkerList by remember { mutableStateOf(false) }
+    var showVoiceHelp by remember { mutableStateOf(false) }
     var markerPendingDelete by remember { mutableStateOf<MapLocation?>(null) }
+    var isListening by remember { mutableStateOf(false) }
+    var isProcessingVoice by remember { mutableStateOf(false) }
+    var pendingTranscript by remember { mutableStateOf<String?>(null) }
+    var lastTranscript by remember { mutableStateOf("") }
+    var lastVoiceEngine by remember { mutableStateOf<VoiceEngine?>(null) }
+
+    val voiceInterpreter = remember {
+        QwenVoiceInterpreter(
+            apiKey = BuildConfig.QWEN_API_KEY,
+            endpoint = BuildConfig.QWEN_BASE_URL,
+            model = BuildConfig.QWEN_MODEL
+        )
+    }
+    val voiceSpeaker = remember { AndroidVoiceSpeaker(context) }
+    val voiceRecognizer = remember {
+        AndroidVoiceRecognizer(
+            context = context,
+            onListeningChanged = { listening -> isListening = listening },
+            onTranscript = { transcript ->
+                lastTranscript = transcript
+                pendingTranscript = transcript
+            },
+            onErrorMessage = viewModel::showMessage
+        )
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            voiceRecognizer.start()
+        } else {
+            viewModel.showMessage("Se necesita permiso de micrófono para usar comandos de voz.")
+        }
+    }
+
+    fun showOnlyMap() {
+        showForm = false
+        showMarkerList = false
+        viewModel.clearSelection()
+    }
+
+    fun executeVoiceCommand(command: VoiceCommand) {
+        lastVoiceEngine = command.engine
+        when (command.action) {
+            VoiceAction.OPEN_FORM -> {
+                showMarkerList = false
+                viewModel.clearSelection()
+                showForm = true
+            }
+
+            VoiceAction.OPEN_MARKERS -> {
+                showForm = false
+                viewModel.clearSelection()
+                showMarkerList = true
+            }
+
+            VoiceAction.SHOW_MAP -> showOnlyMap()
+
+            VoiceAction.FOCUS_MARKER -> {
+                val marker = state.markers.findByVoiceName(command.markerName)
+                if (marker == null) {
+                    viewModel.showMessage("No encontré ese marcador.")
+                } else {
+                    showForm = false
+                    showMarkerList = false
+                    viewModel.selectMarker(marker)
+                }
+            }
+
+            VoiceAction.DELETE_MARKER -> {
+                val marker = state.markers.findByVoiceName(command.markerName)
+                if (marker == null) {
+                    viewModel.showMessage("No encontré el marcador que deseas eliminar.")
+                } else {
+                    markerPendingDelete = marker
+                }
+            }
+
+            VoiceAction.FILL_FORM -> {
+                viewModel.fillForm(
+                    title = command.title,
+                    description = command.description,
+                    latitude = command.latitude,
+                    longitude = command.longitude
+                )
+                showMarkerList = false
+                viewModel.clearSelection()
+                showForm = true
+            }
+
+            VoiceAction.ADD_MARKER -> {
+                viewModel.fillForm(
+                    title = command.title,
+                    description = command.description,
+                    latitude = command.latitude,
+                    longitude = command.longitude
+                )
+                showMarkerList = false
+                viewModel.clearSelection()
+                showForm = true
+                viewModel.addMarker()
+            }
+
+            VoiceAction.SUBMIT_FORM -> {
+                showForm = true
+                viewModel.addMarker()
+            }
+
+            VoiceAction.CLOSE_APP -> {
+                voiceSpeaker.speak(command.response.ifBlank { "Cerrando la aplicación" })
+                Handler(Looper.getMainLooper()).postDelayed(onCloseApp, 800)
+                return
+            }
+
+            VoiceAction.HELP -> showVoiceHelp = true
+
+            VoiceAction.UNKNOWN -> viewModel.showMessage(
+                command.response.ifBlank { "No entendí el comando. Di ayuda para ver ejemplos." }
+            )
+        }
+
+        if (command.action != VoiceAction.UNKNOWN) {
+            voiceSpeaker.speak(command.response)
+            if (command.response.isNotBlank()) {
+                viewModel.showMessage(command.response)
+            }
+        }
+    }
+
+    LaunchedEffect(pendingTranscript) {
+        val transcript = pendingTranscript ?: return@LaunchedEffect
+        pendingTranscript = null
+        isProcessingVoice = true
+        voiceInterpreter.interpret(
+            transcript = transcript,
+            markerTitles = state.markers.map(MapLocation::title)
+        ) { result ->
+            isProcessingVoice = false
+            result.onSuccess(::executeVoiceCommand)
+                .onFailure { error ->
+                    viewModel.showMessage("No se pudo procesar el comando: ${error.message.orEmpty()}")
+                }
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            voiceRecognizer.destroy()
+            voiceInterpreter.close()
+            voiceSpeaker.shutdown()
+        }
+    }
 
     LaunchedEffect(state.message) {
         state.message?.let { message ->
@@ -137,6 +310,28 @@ fun MapScreen(
                     Text("Ver marcadores (${state.markers.size})")
                 }
             }
+
+            VoiceControl(
+                isListening = isListening,
+                isProcessing = isProcessingVoice,
+                isQwenConfigured = voiceInterpreter.isQwenConfigured,
+                lastTranscript = lastTranscript,
+                lastEngine = lastVoiceEngine,
+                onClick = {
+                    if (isListening) {
+                        voiceRecognizer.stop()
+                    } else if (
+                        ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.RECORD_AUDIO
+                        ) == PackageManager.PERMISSION_GRANTED
+                    ) {
+                        voiceRecognizer.start()
+                    } else {
+                        permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    }
+                }
+            )
         }
     }
 
@@ -208,6 +403,88 @@ fun MapScreen(
                 }
             }
         )
+    }
+
+    if (showVoiceHelp) {
+        AlertDialog(
+            onDismissRequest = { showVoiceHelp = false },
+            title = { Text("Comandos de voz") },
+            text = {
+                Text(
+                    "Prueba diciendo:\n\n" +
+                        "• Abre nueva ubicación.\n" +
+                        "• Muéstrame todos los marcadores.\n" +
+                        "• Busca Plaza de Armas.\n" +
+                        "• Elimina Sacsayhuamán.\n" +
+                        "• Guarda el formulario.\n" +
+                        "• Vuelve al mapa.\n" +
+                        "• Cierra la aplicación."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showVoiceHelp = false }) { Text("Entendido") }
+            }
+        )
+    }
+}
+
+@Composable
+private fun VoiceControl(
+    isListening: Boolean,
+    isProcessing: Boolean,
+    isQwenConfigured: Boolean,
+    lastTranscript: String,
+    lastEngine: VoiceEngine?,
+    onClick: () -> Unit
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Button(
+                onClick = onClick,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp),
+                enabled = !isProcessing
+            ) {
+                Text(
+                    when {
+                        isProcessing -> "Qwen está interpretando…"
+                        isListening -> "Escuchando… Toca para detener"
+                        else -> "🎙 Hablar con Qwen"
+                    }
+                )
+            }
+            Text(
+                text = if (isQwenConfigured) {
+                    "Qwen conectado"
+                } else {
+                    "Qwen sin API key · comandos básicos en modo local"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+            if (lastTranscript.isNotBlank()) {
+                val engine = when (lastEngine) {
+                    VoiceEngine.QWEN -> "Qwen"
+                    VoiceEngine.LOCAL -> "Local"
+                    null -> "Procesando"
+                }
+                Text(
+                    text = "Último comando ($engine): “$lastTranscript”",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+                )
+            }
+        }
     }
 }
 
@@ -592,3 +869,25 @@ private fun MapLocation.coordinatesText(): String = String.format(
     latitude,
     longitude
 )
+
+private fun List<MapLocation>.findByVoiceName(name: String?): MapLocation? {
+    val target = name?.voiceNormalized().orEmpty()
+    if (target.isBlank()) return null
+
+    return firstOrNull { marker ->
+        val title = marker.title.voiceNormalized()
+        title == target || title.contains(target) || target.contains(title)
+    } ?: maxByOrNull { marker ->
+        val titleWords = marker.title.voiceNormalized().split(' ').filter { it.length > 3 }
+        titleWords.count(target::contains)
+    }?.takeIf { marker ->
+        marker.title.voiceNormalized().split(' ').filter { it.length > 3 }
+            .count(target::contains) >= 1
+    }
+}
+
+private fun String.voiceNormalized(): String = Normalizer
+    .normalize(this, Normalizer.Form.NFD)
+    .replace(Regex("\\p{M}+"), "")
+    .lowercase(Locale.ROOT)
+    .trim()

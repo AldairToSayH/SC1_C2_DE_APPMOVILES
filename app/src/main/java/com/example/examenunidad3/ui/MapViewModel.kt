@@ -77,6 +77,25 @@ class MapViewModel(
         )
     }
 
+    fun fillForm(
+        title: String?,
+        description: String?,
+        latitude: Double?,
+        longitude: Double?
+    ) {
+        uiState = uiState.copy(
+            title = title ?: uiState.title,
+            description = description ?: uiState.description,
+            latitude = latitude?.toCoordinateText() ?: uiState.latitude,
+            longitude = longitude?.toCoordinateText() ?: uiState.longitude,
+            errors = FormErrors()
+        )
+    }
+
+    fun showMessage(message: String) {
+        uiState = uiState.copy(message = message)
+    }
+
     fun addMarker() {
         if (!repository.isConfigured) {
             uiState = uiState.copy(

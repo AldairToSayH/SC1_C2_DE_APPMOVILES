@@ -17,6 +17,9 @@ val localProperties = Properties().apply {
     }
 }
 
+fun String.asBuildConfigString(): String =
+    "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
+
 android {
     namespace = "com.example.examenunidad3"
     compileSdk {
@@ -32,6 +35,25 @@ android {
 
         manifestPlaceholders["MAPS_API_KEY"] =
             localProperties.getProperty("MAPS_API_KEY", "PENDIENTE_CONFIGURAR")
+
+        buildConfigField(
+            "String",
+            "QWEN_API_KEY",
+            localProperties.getProperty("QWEN_API_KEY", "").asBuildConfigString()
+        )
+        buildConfigField(
+            "String",
+            "QWEN_BASE_URL",
+            localProperties.getProperty(
+                "QWEN_BASE_URL",
+                "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
+            ).asBuildConfigString()
+        )
+        buildConfigField(
+            "String",
+            "QWEN_MODEL",
+            localProperties.getProperty("QWEN_MODEL", "qwen-plus").asBuildConfigString()
+        )
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -49,6 +71,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
