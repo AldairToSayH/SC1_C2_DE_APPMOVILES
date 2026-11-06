@@ -25,3 +25,4 @@ keystore.properties
 *.keystore
 *.pem
 *.key
+firebase-debug.log
